@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Сдай бутылку — демо</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0E0F14; --surface:#171923; --surface2:#1E212D; --border:#2A2D3B;
+    --text:#ECEDF3; --muted:#8A8DA1; --biz:#47ACA5; --dev:#E8A33D; --success:#4CB27D;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0; background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; min-height:100vh;}
+  .mono{font-family:'JetBrains Mono',monospace;}
+  .wrap{max-width:420px; margin:0 auto; padding:28px 20px 60px;}
+  h1{font-size:20px; font-weight:700; margin:0 0 4px;}
+  .muted{color:var(--muted); font-size:13px; line-height:1.5;}
+
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:24px; margin-top:18px;}
+  .qr-box{background:#fff; border-radius:12px; padding:16px; display:flex; justify-content:center; margin:16px 0;}
+
+  .count-row{display:flex; align-items:baseline; gap:8px; margin-bottom:6px;}
+  .count{font-size:40px; font-weight:700; font-family:'JetBrains Mono',monospace;}
+  .count-label{color:var(--muted); font-size:13px;}
+
+  .bar-track{background:var(--surface2); border-radius:8px; height:14px; overflow:hidden; margin:10px 0;}
+  .bar-fill{background:var(--biz); height:100%; border-radius:8px; transition:width .4s ease;}
+
+  .tier-text{font-size:13px; color:var(--text); margin-top:4px;}
+  .tier-reward{font-size:13px; color:var(--dev); margin-top:8px; padding:10px 12px; background:rgba(232,163,61,0.12); border-radius:8px;}
+  .maxed{color:var(--success); font-weight:600;}
+
+  .hint{
+    margin-top:22px; font-size:12px; color:var(--muted); line-height:1.6;
+    border-top:1px solid var(--border); padding-top:16px;
+  }
+  .hint code{background:var(--surface2); padding:2px 6px; border-radius:4px; color:var(--text);}
+
+  /* admin */
+  .admin-badge{
+    display:inline-block; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--dev);
+    border:1px solid var(--dev); border-radius:20px; padding:3px 10px; margin-bottom:10px;
+  }
+  input[type="text"]{
+    width:100%; background:var(--bg); border:1px solid var(--border); border-radius:8px;
+    padding:11px 13px; color:var(--text); font-family:'JetBrains Mono',monospace; font-size:14px; margin-bottom:10px;
+  }
+  input:focus{outline:2px solid var(--biz); outline-offset:1px;}
+  button{
+    width:100%; background:var(--biz); color:#0E0F14; border:none; border-radius:8px;
+    padding:12px; font-weight:600; font-size:14px; cursor:pointer; font-family:'Inter',sans-serif;
+  }
+  button:hover{background:#59BDB5;}
+  .log{margin-top:16px; font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:6px;}
+  .log-line{background:var(--surface2); border-radius:6px; padding:8px 10px;}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+  const REWARD_TIERS = [
+    [5, '🎉 5 бутылок — скидка 5% в фудкорте'],
+    [10, '🍔 10 бутылок — скидка в Burger King'],
+    [20, '👕 20 бутылок — скидка на одежду в ТЦ'],
+    [50, '🏆 50 бутылок — максимальный уровень'],
+  ];
+
+  // Личность человека — локальный профиль в этом браузере,
+  // а не что-то зашитое в QR. QR на урне одинаковый для всех.
+  function getOrCreateLocalProfileId(){
+    let id = localStorage.getItem('bottle_demo_uid');
+    if (!id){
+      id = 'P' + Math.random().toString(36).slice(2, 9).toUpperCase();
+      localStorage.setItem('bottle_demo_uid', id);
+    }
+    return id;
+  }
+
+  // Запасное хранилище в памяти на случай, если window.storage
+  // недоступен или падает с ошибкой в этой среде — чтобы демо
+  // в любом случае работало хотя бы в рамках текущего открытия страницы.
+  const memoryFallback = { bottles: {}, log: [] };
+  let storageBroken = false;
+
+  async function getBottles(id){
+    if (storageBroken) return memoryFallback.bottles[id] || 0;
+    try {
+      const r = await window.storage.get('bottles:' + id, true);
+      return r ? parseInt(r.value, 10) : 0;
+    } catch(e){
+      return memoryFallback.bottles[id] || 0;
+    }
+  }
+
+  async function setBottles(id, n){
+    memoryFallback.bottles[id] = n;
+    if (storageBroken) return;
+    try {
+      await window.storage.set('bottles:' + id, String(n), true);
+    } catch(e){
+      storageBroken = true;
+    }
+  }
+
+  async function pushLog(id, n){
+    memoryFallback.log.unshift({ id, n, t: new Date().toLocaleTimeString('ru-RU') });
+    memoryFallback.log = memoryFallback.log.slice(0, 20);
+    if (storageBroken) return;
+    try {
+      const r = await window.storage.get('log', true);
+      const log = r ? JSON.parse(r.value) : [];
+      log.unshift({ id, n, t: new Date().toLocaleTimeString('ru-RU') });
+      await window.storage.set('log', JSON.stringify(log.slice(0, 20)), true);
+    } catch(e){
+      storageBroken = true;
+    }
+  }
+
+  function nextTier(n){
+    for (const [th, label] of REWARD_TIERS){
+      if (n < th) return [th, label];
+    }
+    return null;
+  }
+
+  // ---------------- ПРОФИЛЬ ----------------
+  async function renderProfile(justScanned){
+    const id = getOrCreateLocalProfileId();
+    const app = document.getElementById('app');
+
+    app.innerHTML = `
+      <h1>♻️ Сдай бутылку</h1>
+      <p class="muted">Твой профиль на этом устройстве. В реальной системе QR висит на урне, ты сканируешь его камерой — здесь эта часть симулируется кнопкой ниже, потому что в этой демо-среде ссылки и QR физически никуда не ведут.</p>
+      ${justScanned ? `<div class="tier-reward" style="margin-top:14px;">✅ Бутылка засчитана!</div>` : ''}
+      <div class="card">
+        <div class="count-row"><span class="count" id="count">0</span><span class="count-label">бутылок сдано</span></div>
+        <div class="bar-track"><div class="bar-fill" id="bar" style="width:0%"></div></div>
+        <div class="tier-text" id="tierText"></div>
+      </div>
+      <div class="card">
+        <div class="muted" style="margin-bottom:10px;">Демо-урна №1 (в реальности — стикер на баке)</div>
+        <div class="qr-box"><div id="qr"></div></div>
+        <p class="muted" style="text-align:center; margin:10px 0 0;">В реальной жизни: наводишь камеру на этот QR.<br>Здесь — просто нажми кнопку:</p>
+        <button id="scanBtn" style="margin-top:12px;">📷 Симулировать скан QR на урне</button>
+      </div>
+      <div class="hint">
+        Статистика по всем "сканированиям" (то, что видел бы оператор ТЦ):
+        <button id="statsBtn" style="margin-top:8px; background:var(--surface2); color:var(--text);">Открыть статистику</button>
+      </div>
+    `;
+
+    document.getElementById('scanBtn').addEventListener('click', async () => {
+      const n = (await getBottles(id)) + 1;
+      await setBottles(id, n);
+      await pushLog(id, n);
+      renderProfile(true);
+    });
+
+    document.getElementById('statsBtn').addEventListener('click', renderAdmin);
+
+    try {
+      new QRCode(document.getElementById('qr'), { text: 'URN-1', width: 140, height: 140 });
+    } catch(e){
+      document.getElementById('qr').innerHTML = '<div class="muted" style="padding:20px;">QR временно недоступен</div>';
+    }
+
+    async function refresh(){
+      const n = await getBottles(id);
+      document.getElementById('count').textContent = n;
+      const tier = nextTier(n);
+      if (tier){
+        const [th, label] = tier;
+        document.getElementById('bar').style.width = Math.min(100, (n/th)*100) + '%';
+        document.getElementById('tierText').innerHTML =
+          `До следующей награды: <b>${th - n}</b><br><span class="muted">${label}</span>`;
+      } else {
+        document.getElementById('bar').style.width = '100%';
+        document.getElementById('tierText').innerHTML = `<span class="maxed">🏆 Максимальный уровень достигнут</span>`;
+      }
+    }
+    refresh();
+  }
+
+  // ---------------- СТАТИСТИКА ----------------
+  async function renderAdmin(){
+    const app = document.getElementById('app');
+    app.innerHTML = `
+      <span class="admin-badge">СТАТИСТИКА (демо)</span>
+      <h1>Активность по урнам</h1>
+      <p class="muted">Лог сканирований — то, что видел бы оператор ТЦ.</p>
+      <div class="card"><div class="log" id="log"></div></div>
+      <button id="backBtn" style="margin-top:16px; background:var(--surface2); color:var(--text);">← Вернуться в профиль</button>
+    `;
+    let log = [];
+    if (!storageBroken) {
+      try {
+        const r = await window.storage.get('log', true);
+        log = r ? JSON.parse(r.value) : [];
+      } catch(e){
+        log = memoryFallback.log;
+      }
+    } else {
+      log = memoryFallback.log;
+    }
+    document.getElementById('log').innerHTML = log.map(e =>
+      `<div class="log-line">${e.t} — профиль ${e.id}: стало ${e.n} 🍾</div>`
+    ).join('') || '<div class="muted">Пока не было сканирований</div>';
+    document.getElementById('backBtn').addEventListener('click', () => renderProfile(false));
+  }
+
+  renderProfile(false);
+</script>
+</body>
+</html>
